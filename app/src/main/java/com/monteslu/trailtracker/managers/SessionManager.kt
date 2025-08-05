@@ -46,7 +46,7 @@ class SessionManager(private val context: Context) {
             startTime = System.currentTimeMillis()
             // Count existing frames
             frameCount = routeDir.listFiles { _, name -> 
-                name.endsWith(".webp") 
+                name.endsWith(".webp") || name.endsWith(".jpg") 
             }?.size?.toLong() ?: 0L
         }
         
@@ -123,7 +123,7 @@ class SessionManager(private val context: Context) {
         
         // Count existing files for accurate frame count and duration
         val existingFiles = routeDir.listFiles { _, name -> 
-            name.endsWith(".jpg") || name.endsWith(".webp") 
+            name.endsWith(".webp") || name.endsWith(".jpg") 
         }?.size?.toLong() ?: 0L
         
         // Update frame count with existing files

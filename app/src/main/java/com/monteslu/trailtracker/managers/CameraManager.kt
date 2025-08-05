@@ -46,18 +46,18 @@ class CameraManager(private val context: Context) {
         cameraProviderFuture.addListener({
             cameraProvider = cameraProviderFuture.get()
             
-            // Preview use case - force 16:9 aspect ratio
+            // Preview use case - explicit 1080p resolution
             preview = Preview.Builder()
-                .setTargetAspectRatio(AspectRatio.RATIO_16_9)
+                .setTargetResolution(Size(1920, 1080))
                 .setTargetRotation(android.view.Surface.ROTATION_0) // Lock to landscape
                 .build()
                 .also {
                     it.setSurfaceProvider(surfaceProvider)
                 }
             
-            // High-speed ImageAnalysis for true 30fps frame extraction - force 16:9 aspect ratio
+            // High-speed ImageAnalysis for true 30fps frame extraction - explicit 1080p resolution
             imageAnalysis = ImageAnalysis.Builder()
-                .setTargetAspectRatio(AspectRatio.RATIO_16_9)
+                .setTargetResolution(Size(1920, 1080))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                 .setTargetRotation(android.view.Surface.ROTATION_0) // Lock to landscape
@@ -115,7 +115,7 @@ class CameraManager(private val context: Context) {
                 try {
                     val outputFile = File(outputDir, "$timestamp.jpg")
                     
-                    // Direct JPEG save without bitmap conversion
+                    // Fast JPEG save to maintain 30fps
                     saveImageProxyDirectly(imageProxy, outputFile)
                     
                     val currentFrameCount = frameCount.incrementAndGet()
@@ -143,7 +143,7 @@ class CameraManager(private val context: Context) {
         }
     }
     
-    // Optimized: Direct JPEG save without bitmap conversion
+    // Optimized: Direct JPEG save for maximum speed
     private fun saveImageProxyDirectly(imageProxy: ImageProxy, outputFile: File) {
         Log.d("CameraManager", "ImageProxy dimensions: ${imageProxy.width}x${imageProxy.height}")
         
@@ -169,13 +169,22 @@ class CameraManager(private val context: Context) {
             null
         )
         
-        // Direct JPEG save - no bitmap conversion
+        // Crop to exact 1920x1080 and save - 85% quality for 1440p upscaling + graphics overlay
+        val targetWidth = 1920
+        val targetHeight = 1080
+        
+        val cropRect = if (imageProxy.width == imageProxy.height) {
+            // Square image - crop top and bottom to get 16:9
+            val cropHeight = (imageProxy.width * 9) / 16  // 16:9 ratio
+            val yOffset = (imageProxy.height - cropHeight) / 2
+            android.graphics.Rect(0, yOffset, imageProxy.width, yOffset + cropHeight)
+        } else {
+            // Use full image if already correct ratio
+            android.graphics.Rect(0, 0, imageProxy.width, imageProxy.height)
+        }
+        
         FileOutputStream(outputFile).use { out ->
-            yuvImage.compressToJpeg(
-                android.graphics.Rect(0, 0, imageProxy.width, imageProxy.height), 
-                92, 
-                out
-            )
+            yuvImage.compressToJpeg(cropRect, 85, out)
         }
     }
     
