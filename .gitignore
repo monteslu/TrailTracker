@@ -1,15 +1,27 @@
 *.iml
 .gradle
 /local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
 .DS_Store
 /build
 /captures
 .externalNativeBuild
 .cxx
 local.properties
+
+# IDE files - complete exclusion
+.idea/
+
+# Gradle wrapper jar
+gradle/wrapper/gradle-wrapper.jar
+
+# Build outputs
+*.apk
+*.aab
+*.dex
+*.class
+
+# Logs
+*.log
+
+# OS generated files
+Thumbs.db
