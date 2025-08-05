@@ -4,9 +4,9 @@ TrailTracker is a minimal Android app for recording timestamped camera frames an
 
 ## 🎯 Purpose
 
-- Capture 1080p 30fps images with WebP compression (92%)
+- Capture 1080p 30fps images with JPEG compression (85%)
 - Log GPS location and compass heading in JSONL format
-- Save to a uniquely named folder per route
+- Save to app-private storage per route
 - Designed for later processing using external tools
 
 ---
@@ -14,10 +14,10 @@ TrailTracker is a minimal Android app for recording timestamped camera frames an
 ## 📂 Output Structure
 
 ```
-/storage/emulated/0/TrailTracker/
+/Android/data/com.monteslu.trailtracker/files/
 └── <ROUTE_NAME>/
-    ├── 1754419666486.webp
-    ├── 1754419666520.webp
+    ├── 1754419666486.jpg
+    ├── 1754419666520.jpg
     ├── ...
     └── points.jsonl
 ```
@@ -26,11 +26,11 @@ TrailTracker is a minimal Android app for recording timestamped camera frames an
 
 ## 📸 Image Format
 
-- Resolution: **1920x1080**
-- Format: **WebP**
+- Resolution: **1920x1080** (cropped from square if needed)
+- Format: **JPEG**
 - Frame Rate: **30 fps**
-- Quality: **92%**
-- Naming: `timestamp.webp` (milliseconds since epoch)
+- Quality: **85%**
+- Naming: `timestamp.jpg` (milliseconds since epoch)
 
 ---
 
