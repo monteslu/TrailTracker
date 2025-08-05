@@ -1,0 +1,180 @@
+package com.monteslu.trailtracker.managers
+
+import android.content.Context
+import android.os.Environment
+import android.os.StatFs
+import com.google.gson.Gson
+import com.monteslu.trailtracker.data.GpsPoint
+import com.monteslu.trailtracker.data.LastSession
+import com.monteslu.trailtracker.data.SessionState
+import kotlinx.coroutines.*
+import java.io.File
+import java.io.FileWriter
+
+class SessionManager(private val context: Context) {
+    private val gson = Gson()
+    private val baseDir = File(context.getExternalFilesDir(null), "TrailTracker")
+    private val lastSessionFile = File(baseDir, "lastSession.json")
+    
+    private var frameCount = 0L
+    private var startTime = 0L
+    private var captureJob: Job? = null
+    private var gpsWriter: FileWriter? = null
+    
+    init {
+        baseDir.mkdirs()
+    }
+    
+    fun getAllRoutes(): List<String> {
+        if (!baseDir.exists()) return emptyList()
+        
+        return baseDir.listFiles()?.filter { dir ->
+            dir.isDirectory
+        }?.map { it.name } ?: emptyList()
+    }
+    
+    fun startOrResumeSession(routeName: String): Boolean {
+        val routeDir = File(baseDir, routeName)
+        
+        if (!routeDir.exists()) {
+            // New session
+            routeDir.mkdirs()
+            startTime = System.currentTimeMillis()
+            frameCount = 0
+        } else {
+            // Resume existing session
+            startTime = System.currentTimeMillis()
+            // Count existing frames
+            frameCount = routeDir.listFiles { _, name -> 
+                name.endsWith(".webp") 
+            }?.size?.toLong() ?: 0L
+        }
+        
+        // Save current session state (always paused initially)
+        val lastSession = LastSession(routeName, false, startTime)
+        saveLastSession(lastSession)
+        
+        // Initialize GPS writer in append mode
+        val gpsFile = File(routeDir, "points.jsonl")
+        gpsWriter = FileWriter(gpsFile, true)
+        
+        return true
+    }
+    
+    fun startCapture(
+        routeName: String,
+        cameraManager: CameraManager,
+        scope: CoroutineScope,
+        onFpsUpdate: (Float) -> Unit
+    ) {
+        val routeDir = File(baseDir, routeName)
+        
+        // Start high-speed camera capture
+        cameraManager.startCapture(
+            outputDir = routeDir,
+            onFrameCaptured = { timestamp ->
+                frameCount++
+                
+                // Check storage space periodically (every 100 frames)
+                if (frameCount % 100L == 0L) {
+                    if (getAvailableStorageGB() < 2.0) {
+                        pauseSession()
+                    }
+                }
+            },
+            onFpsUpdate = onFpsUpdate
+        )
+    }
+    
+    fun logGpsPoint(gpsPoint: GpsPoint) {
+        gpsWriter?.let { writer ->
+            try {
+                writer.write(gson.toJson(gpsPoint) + "\n")
+                writer.flush()
+            } catch (e: Exception) {
+                // Handle error
+            }
+        }
+    }
+    
+    fun pauseSession() {
+        captureJob?.cancel()
+        // Keep GPS writer open and lastSession.json intact for resuming
+    }
+    
+    fun stopCapture(cameraManager: CameraManager) {
+        cameraManager.stopCapture()
+        pauseSession()
+    }
+    
+    fun getLastSession(): LastSession? {
+        if (!lastSessionFile.exists()) return null
+        
+        return try {
+            val json = lastSessionFile.readText()
+            gson.fromJson(json, LastSession::class.java)
+        } catch (e: Exception) {
+            null
+        }
+    }
+    
+    fun getCurrentSessionState(routeName: String): SessionState {
+        val routeDir = File(baseDir, routeName)
+        
+        // Count existing files for accurate frame count and duration
+        val existingFiles = routeDir.listFiles { _, name -> 
+            name.endsWith(".jpg") || name.endsWith(".webp") 
+        }?.size?.toLong() ?: 0L
+        
+        // Update frame count with existing files
+        val totalFrames = if (captureJob?.isActive == true) {
+            frameCount + existingFiles
+        } else {
+            existingFiles
+        }
+        
+        // Calculate duration based on file count (assuming ~30fps)
+        val estimatedDuration = if (totalFrames > 0) {
+            (totalFrames * 1000L) / 30L // milliseconds
+        } else if (startTime > 0) {
+            System.currentTimeMillis() - startTime
+        } else 0L
+        
+        return SessionState(
+            routeName = routeName,
+            isRecording = captureJob?.isActive == true,
+            frameCount = totalFrames,
+            startTime = startTime,
+            duration = estimatedDuration
+        )
+    }
+    
+    private fun saveLastSession(lastSession: LastSession) {
+        try {
+            val json = gson.toJson(lastSession)
+            lastSessionFile.writeText(json)
+        } catch (e: Exception) {
+            // Handle error
+        }
+    }
+    
+    private fun getAvailableStorageGB(): Double {
+        val stat = StatFs(baseDir.path)
+        val bytesAvailable = stat.blockSizeLong * stat.availableBlocksLong
+        return bytesAvailable / (1024.0 * 1024.0 * 1024.0)
+    }
+    
+    fun getStorageWarning(): String? {
+        val availableGB = getAvailableStorageGB()
+        return when {
+            availableGB < 2.0 -> "Critical: Less than 2GB storage remaining!"
+            availableGB < 10.0 -> "Warning: Less than 10GB storage remaining"
+            else -> null
+        }
+    }
+    
+    fun deleteRoute(routeName: String) {
+        val routeDir = File(baseDir, routeName)
+        routeDir.deleteRecursively()
+    }
+}
