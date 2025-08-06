@@ -19,6 +19,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import android.util.Log
+import androidx.exifinterface.media.ExifInterface
+import com.monteslu.trailtracker.data.GpsPoint
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import com.monteslu.trailtracker.utils.XmpWriter
 
 class CameraManager(private val context: Context) {
     private var cameraProvider: ProcessCameraProvider? = null
@@ -30,6 +36,8 @@ class CameraManager(private val context: Context) {
     private var isCapturing = AtomicBoolean(false)
     private var outputDirectory: File? = null
     private var frameCallback: ((Long) -> Unit)? = null
+    private var currentGpsPoint: GpsPoint? = null
+    private var currentCompass: Float = 0f
     
     // FPS tracking
     private var frameCount = AtomicLong(0)
@@ -134,7 +142,7 @@ class CameraManager(private val context: Context) {
                     val outputFile = File(outputDir, "$timestamp.jpg")
                     
                     // Fast JPEG save to maintain 30fps
-                    saveImageProxyDirectly(imageProxy, outputFile)
+                    saveImageProxyDirectly(imageProxy, outputFile, timestamp)
                     
                     val saveTime = System.currentTimeMillis() - startTime
                     if (saveTime > 50) {
@@ -168,7 +176,7 @@ class CameraManager(private val context: Context) {
     }
     
     // Optimized: Direct JPEG save for maximum speed
-    private fun saveImageProxyDirectly(imageProxy: ImageProxy, outputFile: File) {
+    private fun saveImageProxyDirectly(imageProxy: ImageProxy, outputFile: File, timestamp: Long) {
         // Log dimensions only occasionally to reduce overhead
         if (frameCount.get() % 300L == 0L) {
             Log.d("CameraManager", "ImageProxy dimensions: ${imageProxy.width}x${imageProxy.height}")
@@ -214,12 +222,62 @@ class CameraManager(private val context: Context) {
         FileOutputStream(outputFile).use { out ->
             yuvImage.compressToJpeg(cropRect, 60, out)
         }
+        
+        // Add EXIF data if GPS is available
+        try {
+            val exif = ExifInterface(outputFile.absolutePath)
+            
+            // Add timestamp
+            val dateFormat = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
+            exif.setAttribute(ExifInterface.TAG_DATETIME, dateFormat.format(Date(timestamp)))
+            exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, dateFormat.format(Date(timestamp)))
+            
+            // Add GPS data if available
+            currentGpsPoint?.let { gps ->
+                exif.setLatLong(gps.lat, gps.lon)
+                exif.setAttribute(ExifInterface.TAG_GPS_ALTITUDE, gps.alt.toString())
+                exif.setAttribute(ExifInterface.TAG_GPS_ALTITUDE_REF, if (gps.alt >= 0) "0" else "1")
+                
+                // Add speed if available
+                if (gps.speed > 0) {
+                    exif.setAttribute(ExifInterface.TAG_GPS_SPEED, gps.speed.toString())
+                    exif.setAttribute(ExifInterface.TAG_GPS_SPEED_REF, "M") // meters/second
+                }
+                
+                // GPS timestamp
+                exif.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, dateFormat.format(Date(gps.timestamp)))
+            }
+            
+            // Add compass direction
+            // Note: ExifInterface may not have TAG_GPS_IMG_DIRECTION constant, using string directly
+            exif.setAttribute("GPSImgDirection", currentCompass.toString())
+            exif.setAttribute("GPSImgDirectionRef", "M") // Magnetic North
+            
+            // Debug log
+            Log.d("CameraManager", "EXIF: GPS=${currentGpsPoint?.lat},${currentGpsPoint?.lon} Compass=$currentCompass")
+            
+            exif.saveAttributes()
+        } catch (e: Exception) {
+            Log.e("CameraManager", "Error writing EXIF data", e)
+        }
+        
+        // Add XMP metadata with full precision data
+        try {
+            XmpWriter.addXmpToJpeg(outputFile, currentGpsPoint, currentCompass, timestamp)
+        } catch (e: Exception) {
+            Log.e("CameraManager", "Error writing XMP data", e)
+        }
     }
     
     fun stopCapture() {
         isCapturing.set(false)
         frameCallback = null
         fpsCallback = null
+    }
+    
+    fun updateGpsData(gpsPoint: GpsPoint?, compass: Float) {
+        currentGpsPoint = gpsPoint
+        currentCompass = compass
     }
     
     

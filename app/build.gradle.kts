@@ -67,6 +67,9 @@ dependencies {
     // Fragment for activity results
     implementation(libs.androidx.fragment)
     
+    // EXIF handling
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+    
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

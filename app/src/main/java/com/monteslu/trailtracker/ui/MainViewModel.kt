@@ -55,6 +55,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             compassManager.getCompassUpdates().collect { heading ->
                 _compass.value = heading
+                // Update camera manager with latest compass data
+                cameraManager.updateGpsData(_gpsPoint.value, heading)
             }
         }
     }
@@ -63,6 +65,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             locationManager.getLocationUpdates { _compass.value }.collect { gpsPoint ->
                 _gpsPoint.value = gpsPoint
+                // Update camera manager with latest GPS data
+                cameraManager.updateGpsData(gpsPoint, _compass.value)
                 if (_uiState.value.isRecording) {
                     sessionManager.logGpsPoint(gpsPoint)
                 }
