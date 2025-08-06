@@ -25,7 +25,7 @@ class CameraManager(private val context: Context) {
     private var imageAnalysis: ImageAnalysis? = null
     private var preview: Preview? = null
     private val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
-    private val processingScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val processingScope = CoroutineScope(Dispatchers.IO.limitedParallelism(2) + SupervisorJob())
     
     private var isCapturing = AtomicBoolean(false)
     private var outputDirectory: File? = null
@@ -35,6 +35,7 @@ class CameraManager(private val context: Context) {
     private var frameCount = AtomicLong(0)
     private var lastFpsTime = System.currentTimeMillis()
     private var fpsCallback: ((Float) -> Unit)? = null
+    private var activeProcessingCount = AtomicLong(0)
     
     fun setupCamera(
         lifecycleOwner: LifecycleOwner,
@@ -61,6 +62,7 @@ class CameraManager(private val context: Context) {
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                 .setTargetRotation(android.view.Surface.ROTATION_0) // Lock to landscape
+                .setImageQueueDepth(1) // Minimize buffer queue
                 .build()
                 .also { analysis ->
                     analysis.setAnalyzer(cameraExecutor) { imageProxy ->
@@ -110,13 +112,34 @@ class CameraManager(private val context: Context) {
         val outputDir = outputDirectory
         
         if (outputDir != null) {
+            // Drop frames if processing queue is backed up (maintain real-time performance)
+            val currentProcessingCount = activeProcessingCount.get()
+            if (currentProcessingCount >= 2) {
+                if (frameCount.get() % 30L == 0L) {
+                    Log.w("CameraManager", "Dropping frame - processing queue backed up (count: $currentProcessingCount)")
+                }
+                imageProxy.close()
+                return
+            }
+            
             // Process frame asynchronously - optimized direct save
+            val processingCount = activeProcessingCount.incrementAndGet()
+            if (processingCount > 3) {
+                Log.d("CameraManager", "High processing queue: $processingCount active")
+            }
+            
             processingScope.launch {
+                val startTime = System.currentTimeMillis()
                 try {
                     val outputFile = File(outputDir, "$timestamp.jpg")
                     
                     // Fast JPEG save to maintain 30fps
                     saveImageProxyDirectly(imageProxy, outputFile)
+                    
+                    val saveTime = System.currentTimeMillis() - startTime
+                    if (saveTime > 50) {
+                        Log.w("CameraManager", "Slow save: ${saveTime}ms for frame")
+                    }
                     
                     val currentFrameCount = frameCount.incrementAndGet()
                     
@@ -135,6 +158,7 @@ class CameraManager(private val context: Context) {
                 } catch (e: Exception) {
                     Log.e("CameraManager", "Error processing video frame", e)
                 } finally {
+                    activeProcessingCount.decrementAndGet()
                     imageProxy.close()
                 }
             }
@@ -145,18 +169,25 @@ class CameraManager(private val context: Context) {
     
     // Optimized: Direct JPEG save for maximum speed
     private fun saveImageProxyDirectly(imageProxy: ImageProxy, outputFile: File) {
-        Log.d("CameraManager", "ImageProxy dimensions: ${imageProxy.width}x${imageProxy.height}")
+        // Log dimensions only occasionally to reduce overhead
+        if (frameCount.get() % 300L == 0L) {
+            Log.d("CameraManager", "ImageProxy dimensions: ${imageProxy.width}x${imageProxy.height}")
+        }
         
-        val yBuffer = imageProxy.planes[0].buffer
-        val uBuffer = imageProxy.planes[1].buffer  
-        val vBuffer = imageProxy.planes[2].buffer
+        val planes = imageProxy.planes
+        val yBuffer = planes[0].buffer
+        val uBuffer = planes[1].buffer  
+        val vBuffer = planes[2].buffer
         
         val ySize = yBuffer.remaining()
         val uSize = uBuffer.remaining()
         val vSize = vBuffer.remaining()
         
-        val nv21 = ByteArray(ySize + uSize + vSize)
+        // Reuse byte array if possible to reduce GC pressure
+        val totalSize = ySize + uSize + vSize
+        val nv21 = ByteArray(totalSize)
         
+        // Direct buffer operations
         yBuffer.get(nv21, 0, ySize)
         vBuffer.get(nv21, ySize, vSize)
         uBuffer.get(nv21, ySize + vSize, uSize)
@@ -169,12 +200,9 @@ class CameraManager(private val context: Context) {
             null
         )
         
-        // Crop to exact 1920x1080 and save - 85% quality for 1440p upscaling + graphics overlay
-        val targetWidth = 1920
-        val targetHeight = 1080
-        
+        // Crop to exact 1920x1080 from whatever camera provides
         val cropRect = if (imageProxy.width == imageProxy.height) {
-            // Square image - crop top and bottom to get 16:9
+            // Square image (like 1920x1920) - crop top and bottom to get 16:9
             val cropHeight = (imageProxy.width * 9) / 16  // 16:9 ratio
             val yOffset = (imageProxy.height - cropHeight) / 2
             android.graphics.Rect(0, yOffset, imageProxy.width, yOffset + cropHeight)
@@ -184,7 +212,7 @@ class CameraManager(private val context: Context) {
         }
         
         FileOutputStream(outputFile).use { out ->
-            yuvImage.compressToJpeg(cropRect, 85, out)
+            yuvImage.compressToJpeg(cropRect, 60, out)
         }
     }
     

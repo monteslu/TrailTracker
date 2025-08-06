@@ -20,6 +20,7 @@ class SessionManager(private val context: Context) {
     private var startTime = 0L
     private var captureJob: Job? = null
     private var gpsWriter: FileWriter? = null
+    private var isRecording = false
     
     init {
         baseDir.mkdirs()
@@ -42,9 +43,8 @@ class SessionManager(private val context: Context) {
             startTime = System.currentTimeMillis()
             frameCount = 0
         } else {
-            // Resume existing session
+            // Resume existing session - count existing frames ONCE
             startTime = System.currentTimeMillis()
-            // Count existing frames
             frameCount = routeDir.listFiles { _, name -> 
                 name.endsWith(".webp") || name.endsWith(".jpg") 
             }?.size?.toLong() ?: 0L
@@ -68,6 +68,7 @@ class SessionManager(private val context: Context) {
         onFpsUpdate: (Float) -> Unit
     ) {
         val routeDir = File(baseDir, routeName)
+        isRecording = true
         
         // Start high-speed camera capture
         cameraManager.startCapture(
@@ -103,6 +104,7 @@ class SessionManager(private val context: Context) {
     }
     
     fun stopCapture(cameraManager: CameraManager) {
+        isRecording = false
         cameraManager.stopCapture()
         pauseSession()
     }
@@ -119,31 +121,20 @@ class SessionManager(private val context: Context) {
     }
     
     fun getCurrentSessionState(routeName: String): SessionState {
-        val routeDir = File(baseDir, routeName)
+        // Use in-memory frame count - no file system scanning
+        val totalFrames = frameCount
         
-        // Count existing files for accurate frame count and duration
-        val existingFiles = routeDir.listFiles { _, name -> 
-            name.endsWith(".webp") || name.endsWith(".jpg") 
-        }?.size?.toLong() ?: 0L
-        
-        // Update frame count with existing files
-        val totalFrames = if (captureJob?.isActive == true) {
-            frameCount + existingFiles
-        } else {
-            existingFiles
-        }
-        
-        // Calculate duration based on file count (assuming ~30fps)
+        // Calculate duration based on frame count (assuming ~30fps)
         val estimatedDuration = if (totalFrames > 0) {
             (totalFrames * 1000L) / 30L // milliseconds
-        } else if (startTime > 0 && captureJob?.isActive == true) {
+        } else if (startTime > 0 && isRecording) {
             // Only calculate live duration when actively recording
             System.currentTimeMillis() - startTime
         } else 0L
         
         return SessionState(
             routeName = routeName,
-            isRecording = captureJob?.isActive == true,
+            isRecording = isRecording,
             frameCount = totalFrames,
             startTime = startTime,
             duration = estimatedDuration

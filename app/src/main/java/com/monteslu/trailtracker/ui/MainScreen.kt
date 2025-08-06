@@ -36,6 +36,7 @@ fun MainScreen(viewModel: MainViewModel) {
     val compass by viewModel.compass.collectAsState()
     val fps by viewModel.fps.collectAsState()
     val allRoutes by viewModel.routes.collectAsState()
+    val sessionState by viewModel.sessionState.collectAsState()
     
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
     var cameraReady by remember { mutableStateOf(false) }
@@ -88,9 +89,9 @@ fun MainScreen(viewModel: MainViewModel) {
         }
         
         // Session Info
-        if (uiState.hasActiveSession) {
+        if (uiState.hasActiveSession && sessionState != null) {
             SessionInfoOverlay(
-                sessionState = viewModel.getSessionState(),
+                sessionState = sessionState,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(16.dp)

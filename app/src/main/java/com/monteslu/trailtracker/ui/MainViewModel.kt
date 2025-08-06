@@ -31,10 +31,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _routes = MutableStateFlow<List<String>>(emptyList())
     val routes: StateFlow<List<String>> = _routes.asStateFlow()
     
+    private val _sessionState = MutableStateFlow<SessionState?>(null)
+    val sessionState: StateFlow<SessionState?> = _sessionState.asStateFlow()
+    
     init {
         checkForExistingSession()
         startSensorUpdates()
         refreshRoutes()
+        startSessionStateUpdates()
     }
     
     private fun checkForExistingSession() {
@@ -86,6 +90,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _fps.value = fps
             }
             _uiState.update { it.copy(isRecording = true) }
+            updateSessionState()
         }
     }
     
@@ -93,6 +98,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         powerManager.releaseWakeLock()
         sessionManager.stopCapture(cameraManager)
         _uiState.update { it.copy(isRecording = false) }
+        updateSessionState()
     }
     
     
@@ -114,6 +120,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     
     private fun refreshRoutes() {
         _routes.value = sessionManager.getAllRoutes()
+    }
+    
+    private fun startSessionStateUpdates() {
+        viewModelScope.launch {
+            while (true) {
+                val currentRoute = _uiState.value.currentRoute
+                if (currentRoute.isNotEmpty()) {
+                    _sessionState.value = sessionManager.getCurrentSessionState(currentRoute)
+                } else {
+                    _sessionState.value = null
+                }
+                kotlinx.coroutines.delay(100) // Update every 100ms
+            }
+        }
+    }
+    
+    private fun updateSessionState() {
+        val currentRoute = _uiState.value.currentRoute
+        if (currentRoute.isNotEmpty()) {
+            _sessionState.value = sessionManager.getCurrentSessionState(currentRoute)
+        }
     }
     
     fun getCameraManager(): CameraManager = cameraManager
