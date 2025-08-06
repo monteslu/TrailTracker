@@ -1,5 +1,7 @@
 # TrailTracker: Android Recording App
 
+<img src="app/src/main/ic_launcher-playstore.png" width="120" height="120" align="right">
+
 TrailTracker is a minimal Android app for recording timestamped camera frames and GPS+compass data during cycling routes. The app is designed for clean, structured output with no post-processing or analysis features.
 
 ## 🎯 Purpose
