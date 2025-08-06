@@ -118,6 +118,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     
     fun getCameraManager(): CameraManager = cameraManager
     
+    fun quitApplication() {
+        // Stop all active managers
+        locationManager.stopLocationUpdates()
+        compassManager.stopCompass()
+        cameraManager.shutdown()
+        powerManager.cleanup()
+        
+        // Exit application
+        android.os.Process.killProcess(android.os.Process.myPid())
+    }
+    
     override fun onCleared() {
         super.onCleared()
         locationManager.stopLocationUpdates()

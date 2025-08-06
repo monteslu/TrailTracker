@@ -136,7 +136,8 @@ class SessionManager(private val context: Context) {
         // Calculate duration based on file count (assuming ~30fps)
         val estimatedDuration = if (totalFrames > 0) {
             (totalFrames * 1000L) / 30L // milliseconds
-        } else if (startTime > 0) {
+        } else if (startTime > 0 && captureJob?.isActive == true) {
+            // Only calculate live duration when actively recording
             System.currentTimeMillis() - startTime
         } else 0L
         

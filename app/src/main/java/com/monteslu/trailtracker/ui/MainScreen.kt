@@ -172,6 +172,9 @@ fun MainScreen(viewModel: MainViewModel) {
             onDeleteRoute = { routeName ->
                 viewModel.deleteRoute(routeName)
             },
+            onQuitApp = {
+                viewModel.quitApplication()
+            },
             routes = allRoutes
         )
         

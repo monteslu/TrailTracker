@@ -18,8 +18,11 @@ fun MenuDialog(
     onStartNewSession: () -> Unit,
     onResumeSession: () -> Unit,
     onDeleteRoute: (String) -> Unit,
+    onQuitApp: () -> Unit,
     routes: List<String>
 ) {
+    var showManageSessions by remember { mutableStateOf(false) }
+    
     if (isVisible) {
         Dialog(onDismissRequest = onDismiss) {
             Card(
@@ -64,24 +67,47 @@ fun MenuDialog(
                     }
                     
                     if (routes.isNotEmpty()) {
-                        Divider(modifier = Modifier.padding(vertical = 8.dp))
-                        
-                        Text(
-                            text = "Existing Routes:",
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
-                        
-                        LazyColumn(
-                            modifier = Modifier.heightIn(max = 200.dp)
+                        Button(
+                            onClick = { showManageSessions = !showManageSessions },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.secondary
+                            )
                         ) {
-                            items(routes) { route ->
-                                RouteItem(
-                                    routeName = route,
-                                    onDelete = { onDeleteRoute(route) }
-                                )
+                            Text(if (showManageSessions) "⬆ Hide Sessions" else "🗂 Manage Sessions")
+                        }
+                        
+                        if (showManageSessions) {
+                            LazyColumn(
+                                modifier = Modifier.heightIn(max = 150.dp)
+                            ) {
+                                items(routes) { route ->
+                                    RouteItem(
+                                        routeName = route,
+                                        onDelete = { onDeleteRoute(route) }
+                                    )
+                                }
                             }
                         }
+                    }
+                    
+                    Divider(modifier = Modifier.padding(vertical = 8.dp))
+                    
+                    Button(
+                        onClick = {
+                            onQuitApp()
+                            onDismiss()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text("❌ Quit Application")
                     }
                     
                     TextButton(
