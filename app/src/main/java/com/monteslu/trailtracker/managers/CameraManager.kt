@@ -6,10 +6,15 @@ import android.graphics.ImageFormat
 import android.media.Image
 import android.util.Size
 import androidx.camera.core.*
+import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.SurfaceOrientedMeteringPointFactory
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import kotlinx.coroutines.*
+import kotlinx.coroutines.delay
 import kotlin.coroutines.suspendCoroutine
 import java.io.File
 import java.io.FileOutputStream
@@ -31,7 +36,8 @@ class CameraManager(private val context: Context) {
     private var imageAnalysis: ImageAnalysis? = null
     private var preview: Preview? = null
     private val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
-    private val processingScope = CoroutineScope(Dispatchers.IO.limitedParallelism(2) + SupervisorJob())
+    private val processingScope = CoroutineScope(Dispatchers.IO.limitedParallelism(6) + SupervisorJob())
+    private val metadataScope = CoroutineScope(Dispatchers.IO.limitedParallelism(4) + SupervisorJob())
     
     private var isCapturing = AtomicBoolean(false)
     private var outputDirectory: File? = null
@@ -44,6 +50,11 @@ class CameraManager(private val context: Context) {
     private var lastFpsTime = System.currentTimeMillis()
     private var fpsCallback: ((Float) -> Unit)? = null
     private var activeProcessingCount = AtomicLong(0)
+    
+    // Frame skip control (1 = every frame, 2 = every other, 3 = every 3rd, etc)
+    private var frameSkip: Int = 1
+    private var frameCounter = AtomicLong(0)
+    private val baseCameraFps = 30f // Camera delivers at ~30 FPS natively
     
     fun setupCamera(
         lifecycleOwner: LifecycleOwner,
@@ -64,7 +75,7 @@ class CameraManager(private val context: Context) {
                     it.setSurfaceProvider(surfaceProvider)
                 }
             
-            // High-speed ImageAnalysis for true 30fps frame extraction - explicit 1080p resolution
+            // High-speed ImageAnalysis for true 30fps frame extraction
             imageAnalysis = ImageAnalysis.Builder()
                 .setTargetResolution(Size(1920, 1080))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -82,20 +93,46 @@ class CameraManager(private val context: Context) {
                     }
                 }
             
-            // Select back camera as default
-            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+            // Select back camera with 16:9 aspect ratio preference
+            val cameraSelector = CameraSelector.Builder()
+                .requireLensFacing(CameraSelector.LENS_FACING_BACK)
+                .build()
             
             try {
                 // Unbind use cases before rebinding
                 cameraProvider?.unbindAll()
                 
                 // Bind use cases to camera
-                cameraProvider?.bindToLifecycle(
+                val camera = cameraProvider?.bindToLifecycle(
                     lifecycleOwner,
                     cameraSelector,
                     preview,
                     imageAnalysis
                 )
+                
+                // Set zoom ratio to 1.0x to ensure main Wide camera stays active
+                // Values below 1.0 trigger ultrawide which has poor performance
+                camera?.cameraControl?.setZoomRatio(1.0f)
+                
+                // Initial focus, then lock after 2 seconds
+                val focusPoint = SurfaceOrientedMeteringPointFactory(1.0f, 1.0f)
+                    .createPoint(0.5f, 0.5f) // Center focus
+                
+                // First, do a normal autofocus
+                val initialFocus = FocusMeteringAction.Builder(focusPoint)
+                    .setAutoCancelDuration(2, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+                camera?.cameraControl?.startFocusAndMetering(initialFocus)
+                
+                // After 2.5 seconds, lock focus to prevent hunting
+                CoroutineScope(Dispatchers.Main).launch {
+                    delay(2500)
+                    val lockFocus = FocusMeteringAction.Builder(focusPoint)
+                        .disableAutoCancel() // Lock focus permanently
+                        .build()
+                    camera?.cameraControl?.startFocusAndMetering(lockFocus)
+                    Log.d("CameraManager", "Focus locked after initial autofocus")
+                }
                 
                 onCameraReady()
             } catch (exc: Exception) {
@@ -104,14 +141,22 @@ class CameraManager(private val context: Context) {
         }, ContextCompat.getMainExecutor(context))
     }
     
-    fun startCapture(outputDir: File, onFrameCaptured: (Long) -> Unit, onFpsUpdate: (Float) -> Unit) {
+    fun startCapture(outputDir: File, onFrameCaptured: (Long) -> Unit, onFpsUpdate: (Float) -> Unit, frameSkipValue: Int = 1) {
         outputDirectory = outputDir
         frameCallback = onFrameCaptured
         fpsCallback = onFpsUpdate
+        
+        // Frame skip value directly specifies how many frames to skip
+        // 1 = every frame (30fps), 2 = every other (15fps), 3 = every 3rd (10fps), etc
+        frameSkip = frameSkipValue
+        
         frameCount.set(0)
+        frameCounter.set(0)
         lastFpsTime = System.currentTimeMillis()
         isCapturing.set(true)
-        Log.d("CameraManager", "Started video frame capture")
+        
+        val actualFps = baseCameraFps / frameSkip
+        Log.d("CameraManager", "Started capture: skip every $frameSkip frames, actual ~${actualFps}fps")
     }
     
     // Android equivalent of requestVideoFrameCallback - processes each video frame
@@ -120,9 +165,16 @@ class CameraManager(private val context: Context) {
         val outputDir = outputDirectory
         
         if (outputDir != null) {
-            // Drop frames if processing queue is backed up (maintain real-time performance)
+            // Frame skip logic - only process every Nth frame based on frameSkip
+            val currentFrame = frameCounter.incrementAndGet()
+            if ((currentFrame - 1) % frameSkip != 0L) {
+                imageProxy.close()
+                return
+            }
+            
+            // Drop frames if processing queue is severely backed up
             val currentProcessingCount = activeProcessingCount.get()
-            if (currentProcessingCount >= 2) {
+            if (currentProcessingCount >= 6) {
                 if (frameCount.get() % 30L == 0L) {
                     Log.w("CameraManager", "Dropping frame - processing queue backed up (count: $currentProcessingCount)")
                 }
@@ -151,14 +203,16 @@ class CameraManager(private val context: Context) {
                     
                     val currentFrameCount = frameCount.incrementAndGet()
                     
-                    // Calculate FPS every 30 frames
-                    if (currentFrameCount % 30L == 0L) {
-                        val now = System.currentTimeMillis()
-                        val elapsed = (now - lastFpsTime) / 1000.0f
-                        val fps = 30f / elapsed
+                    // Calculate actual FPS every second
+                    val now = System.currentTimeMillis()
+                    val elapsed = now - lastFpsTime
+                    if (elapsed >= 1000) {
+                        val fps = (currentFrameCount * 1000.0f) / elapsed
+                        frameCount.set(0)
                         lastFpsTime = now
                         
-                        Log.d("CameraManager", "Video frame FPS: $fps")
+                        val expectedFps = baseCameraFps / frameSkip
+                        Log.d("CameraManager", "Video frame FPS: $fps (expected: ~$expectedFps, skip: $frameSkip)")
                         fpsCallback?.invoke(fps)
                     }
                     
@@ -177,6 +231,8 @@ class CameraManager(private val context: Context) {
     
     // Optimized: Direct JPEG save for maximum speed
     private fun saveImageProxyDirectly(imageProxy: ImageProxy, outputFile: File, timestamp: Long) {
+        val saveStartTime = System.currentTimeMillis()
+        
         // Log dimensions only occasionally to reduce overhead
         if (frameCount.get() % 300L == 0L) {
             Log.d("CameraManager", "ImageProxy dimensions: ${imageProxy.width}x${imageProxy.height}")
@@ -208,21 +264,44 @@ class CameraManager(private val context: Context) {
             null
         )
         
-        // Crop to exact 1920x1080 from whatever camera provides
+        // Crop to 16:9 if we have square input
         val cropRect = if (imageProxy.width == imageProxy.height) {
-            // Square image (like 1920x1920) - crop top and bottom to get 16:9
-            val cropHeight = (imageProxy.width * 9) / 16  // 16:9 ratio
+            // Square image - crop to 16:9 (1920x1080 from 1920x1920)
+            val cropHeight = 1080
             val yOffset = (imageProxy.height - cropHeight) / 2
             android.graphics.Rect(0, yOffset, imageProxy.width, yOffset + cropHeight)
         } else {
-            // Use full image if already correct ratio
             android.graphics.Rect(0, 0, imageProxy.width, imageProxy.height)
         }
         
+        val jpegStartTime = System.currentTimeMillis()
         FileOutputStream(outputFile).use { out ->
-            yuvImage.compressToJpeg(cropRect, 60, out)
+            yuvImage.compressToJpeg(cropRect, 85, out) // High quality for trail recording
+        }
+        val jpegTime = System.currentTimeMillis() - jpegStartTime
+        
+        // Log timing for JPEG only
+        val jpegOnlyTime = System.currentTimeMillis() - saveStartTime
+        if (frameCount.get() % 30L == 0L) {
+            Log.d("CameraManager", "JPEG save: ${jpegTime}ms")
+        }
+        if (jpegOnlyTime > 33) {
+            Log.w("CameraManager", "SLOW JPEG: ${jpegOnlyTime}ms")
         }
         
+        // Write metadata asynchronously without blocking
+        val gpsData = currentGpsPoint
+        val compassData = currentCompass
+        metadataScope.launch {
+            try {
+                writeMetadata(outputFile, gpsData, compassData, timestamp)
+            } catch (e: Exception) {
+                // Silently ignore metadata errors to maintain performance
+            }
+        }
+    }
+    
+    private fun writeMetadata(outputFile: File, gpsData: GpsPoint?, compassData: Float, timestamp: Long) {
         // Add EXIF data if GPS is available
         try {
             val exif = ExifInterface(outputFile.absolutePath)
@@ -233,7 +312,7 @@ class CameraManager(private val context: Context) {
             exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, dateFormat.format(Date(timestamp)))
             
             // Add GPS data if available
-            currentGpsPoint?.let { gps ->
+            gpsData?.let { gps ->
                 exif.setLatLong(gps.lat, gps.lon)
                 exif.setAttribute(ExifInterface.TAG_GPS_ALTITUDE, gps.alt.toString())
                 exif.setAttribute(ExifInterface.TAG_GPS_ALTITUDE_REF, if (gps.alt >= 0) "0" else "1")
@@ -249,12 +328,8 @@ class CameraManager(private val context: Context) {
             }
             
             // Add compass direction
-            // Note: ExifInterface may not have TAG_GPS_IMG_DIRECTION constant, using string directly
-            exif.setAttribute("GPSImgDirection", currentCompass.toString())
+            exif.setAttribute("GPSImgDirection", compassData.toString())
             exif.setAttribute("GPSImgDirectionRef", "M") // Magnetic North
-            
-            // Debug log
-            Log.d("CameraManager", "EXIF: GPS=${currentGpsPoint?.lat},${currentGpsPoint?.lon} Compass=$currentCompass")
             
             exif.saveAttributes()
         } catch (e: Exception) {
@@ -263,7 +338,7 @@ class CameraManager(private val context: Context) {
         
         // Add XMP metadata with full precision data
         try {
-            XmpWriter.addXmpToJpeg(outputFile, currentGpsPoint, currentCompass, timestamp)
+            XmpWriter.addXmpToJpeg(outputFile, gpsData, compassData, timestamp)
         } catch (e: Exception) {
             Log.e("CameraManager", "Error writing XMP data", e)
         }
@@ -284,9 +359,19 @@ class CameraManager(private val context: Context) {
     
     fun getPreview(): Preview? = preview
     
+    fun getExpectedFps(): Float = baseCameraFps / frameSkip
+    
+    fun getFrameSkipDescription(): String = when(frameSkip) {
+        1 -> "Every frame"
+        2 -> "Every 2nd frame"
+        3 -> "Every 3rd frame"
+        else -> "Every ${frameSkip}th frame"
+    }
+    
     fun shutdown() {
         stopCapture()
         processingScope.cancel()
+        metadataScope.cancel()
         cameraExecutor.shutdown()
         cameraProvider?.unbindAll()
     }

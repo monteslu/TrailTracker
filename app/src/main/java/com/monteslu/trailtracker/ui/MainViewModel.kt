@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.monteslu.trailtracker.data.GpsPoint
 import com.monteslu.trailtracker.data.SessionState
+import com.monteslu.trailtracker.data.SessionConfig
 import com.monteslu.trailtracker.managers.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -34,6 +35,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _sessionState = MutableStateFlow<SessionState?>(null)
     val sessionState: StateFlow<SessionState?> = _sessionState.asStateFlow()
     
+    private val _frameSkip = MutableStateFlow(1)
+    val frameSkip: StateFlow<Int> = _frameSkip.asStateFlow()
+    
     init {
         checkForExistingSession()
         startSensorUpdates()
@@ -44,6 +48,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun checkForExistingSession() {
         val lastSession = sessionManager.getLastSession()
         if (lastSession != null && lastSession.isRecording) {
+            // Load config for existing session
+            val config = sessionManager.getSessionConfig(lastSession.routeName)
+            if (config != null) {
+                _frameSkip.value = config.frameSkip ?: 1
+            }
             _uiState.update { it.copy(
                 currentRoute = lastSession.routeName,
                 hasActiveSession = true
@@ -74,25 +83,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     
-    fun startSession(routeName: String) {
-        val success = sessionManager.startOrResumeSession(routeName)
-        if (success) {
-            _uiState.update { it.copy(
-                currentRoute = routeName,
-                hasActiveSession = true,
-                isRecording = false
-            )}
-            refreshRoutes() // Refresh routes when starting new session
-        }
+    fun startSession(routeName: String, frameSkip: Int = 1) {
+        val config = sessionManager.startOrResumeSession(routeName, frameSkip)
+        _frameSkip.value = config.frameSkip
+        _uiState.update { it.copy(
+            currentRoute = routeName,
+            hasActiveSession = true,
+            isRecording = false
+        )}
+        refreshRoutes() // Refresh routes when starting new session
     }
     
     fun startRecording() {
         val routeName = _uiState.value.currentRoute
         if (routeName.isNotEmpty()) {
             powerManager.acquireWakeLock()
-            sessionManager.startCapture(routeName, cameraManager, viewModelScope) { fps ->
+            sessionManager.startCapture(routeName, cameraManager, viewModelScope, { fps ->
                 _fps.value = fps
-            }
+            }, _frameSkip.value)
             _uiState.update { it.copy(isRecording = true) }
             updateSessionState()
         }

@@ -7,6 +7,7 @@ import com.google.gson.Gson
 import com.monteslu.trailtracker.data.GpsPoint
 import com.monteslu.trailtracker.data.LastSession
 import com.monteslu.trailtracker.data.SessionState
+import com.monteslu.trailtracker.data.SessionConfig
 import kotlinx.coroutines.*
 import java.io.File
 import java.io.FileWriter
@@ -34,20 +35,60 @@ class SessionManager(private val context: Context) {
         }?.map { it.name } ?: emptyList()
     }
     
-    fun startOrResumeSession(routeName: String): Boolean {
+    fun startOrResumeSession(routeName: String, frameSkip: Int = 1): SessionConfig {
         val routeDir = File(baseDir, routeName)
+        
+        val configFile = File(routeDir, "config.json")
+        val config: SessionConfig
         
         if (!routeDir.exists()) {
             // New session
             routeDir.mkdirs()
             startTime = System.currentTimeMillis()
             frameCount = 0
+            
+            // Create config for new session
+            config = SessionConfig(
+                frameSkip = frameSkip,
+                sessionName = routeName,
+                createdAt = startTime
+            )
+            configFile.writeText(SessionConfig.toJson(config))
         } else {
             // Resume existing session - count existing frames ONCE
             startTime = System.currentTimeMillis()
             frameCount = routeDir.listFiles { _, name -> 
                 name.endsWith(".webp") || name.endsWith(".jpg") 
             }?.size?.toLong() ?: 0L
+            
+            // Load existing config or create default
+            config = if (configFile.exists()) {
+                try {
+                    val existingConfig = SessionConfig.fromJson(configFile.readText())
+                    // Handle legacy configs that use targetFPS
+                    if (existingConfig.targetFPS != null && existingConfig.frameSkip == 1) {
+                        // Convert old targetFPS to frameSkip
+                        val convertedFrameSkip = when(existingConfig.targetFPS) {
+                            30 -> 1
+                            15 -> 2
+                            10 -> 3
+                            5 -> 6
+                            else -> Math.max(1, (30 / existingConfig.targetFPS!!))
+                        }
+                        existingConfig.copy(frameSkip = convertedFrameSkip)
+                    } else {
+                        existingConfig
+                    }
+                } catch (e: Exception) {
+                    // Fallback to default if config is corrupted
+                    SessionConfig(frameSkip = 1, sessionName = routeName)
+                }
+            } else {
+                // Create config for old sessions that don't have one
+                val newConfig = SessionConfig(frameSkip = 1, sessionName = routeName)
+                configFile.writeText(SessionConfig.toJson(newConfig))
+                newConfig
+            }
         }
         
         // Save current session state (always paused initially)
@@ -58,14 +99,15 @@ class SessionManager(private val context: Context) {
         val gpsFile = File(routeDir, "points.jsonl")
         gpsWriter = FileWriter(gpsFile, true)
         
-        return true
+        return config
     }
     
     fun startCapture(
         routeName: String,
         cameraManager: CameraManager,
         scope: CoroutineScope,
-        onFpsUpdate: (Float) -> Unit
+        onFpsUpdate: (Float) -> Unit,
+        frameSkip: Int = 1
     ) {
         val routeDir = File(baseDir, routeName)
         isRecording = true
@@ -83,7 +125,8 @@ class SessionManager(private val context: Context) {
                     }
                 }
             },
-            onFpsUpdate = onFpsUpdate
+            onFpsUpdate = onFpsUpdate,
+            frameSkipValue = frameSkip
         )
     }
     
@@ -116,6 +159,21 @@ class SessionManager(private val context: Context) {
             val json = lastSessionFile.readText()
             gson.fromJson(json, LastSession::class.java)
         } catch (e: Exception) {
+            null
+        }
+    }
+    
+    fun getSessionConfig(routeName: String): SessionConfig? {
+        val routeDir = File(baseDir, routeName)
+        val configFile = File(routeDir, "config.json")
+        
+        return if (configFile.exists()) {
+            try {
+                SessionConfig.fromJson(configFile.readText())
+            } catch (e: Exception) {
+                null
+            }
+        } else {
             null
         }
     }

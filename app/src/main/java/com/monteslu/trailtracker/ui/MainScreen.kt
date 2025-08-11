@@ -35,6 +35,7 @@ fun MainScreen(viewModel: MainViewModel) {
     val gpsPoint by viewModel.gpsPoint.collectAsState()
     val compass by viewModel.compass.collectAsState()
     val fps by viewModel.fps.collectAsState()
+    val frameSkip by viewModel.frameSkip.collectAsState()
     val allRoutes by viewModel.routes.collectAsState()
     val sessionState by viewModel.sessionState.collectAsState()
     
@@ -65,6 +66,7 @@ fun MainScreen(viewModel: MainViewModel) {
             gpsPoint = gpsPoint,
             compass = compass,
             fps = fps,
+            frameSkip = frameSkip,
             isRecording = uiState.isRecording,
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -182,8 +184,8 @@ fun MainScreen(viewModel: MainViewModel) {
         NewSessionDialog(
             isVisible = showNewSessionDialog,
             onDismiss = { showNewSessionDialog = false },
-            onCreateSession = { routeName ->
-                viewModel.startSession(routeName)
+            onCreateSession = { routeName, frameSkip ->
+                viewModel.startSession(routeName, frameSkip)
                 showNewSessionDialog = false
             }
         )
@@ -205,6 +207,7 @@ fun GpsOverlay(
     gpsPoint: GpsPoint?,
     compass: Float,
     fps: Float,
+    frameSkip: Int,
     isRecording: Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -258,11 +261,20 @@ fun GpsOverlay(
             )
             
             if (isRecording) {
+                // Actual FPS with color coding based on expected FPS
+                val expectedFps = 30f / frameSkip
+                val fpsThreshold = expectedFps * 0.9f // 90% of expected
                 Text(
                     text = "FPS: ${String.format("%.1f", fps)}",
-                    color = if (fps >= 25f) Color.Green else Color.Red,
+                    color = if (fps >= fpsThreshold) Color.Green else Color.Red,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold
+                )
+                // Expected FPS display
+                Text(
+                    text = "Expected: ${String.format("%.0f", expectedFps)} fps",
+                    color = Color.Gray,
+                    fontSize = 16.sp
                 )
             }
         }
