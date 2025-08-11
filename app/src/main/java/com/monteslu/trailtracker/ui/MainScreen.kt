@@ -2,6 +2,7 @@ package com.monteslu.trailtracker.ui
 
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -38,6 +39,7 @@ fun MainScreen(viewModel: MainViewModel) {
     val frameSkip by viewModel.frameSkip.collectAsState()
     val allRoutes by viewModel.routes.collectAsState()
     val sessionState by viewModel.sessionState.collectAsState()
+    val batteryLevel by viewModel.batteryLevel.collectAsState()
     
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
     var cameraReady by remember { mutableStateOf(false) }
@@ -94,6 +96,7 @@ fun MainScreen(viewModel: MainViewModel) {
         if (uiState.hasActiveSession && sessionState != null) {
             SessionInfoOverlay(
                 sessionState = sessionState,
+                batteryLevel = batteryLevel,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(16.dp)
@@ -284,6 +287,7 @@ fun GpsOverlay(
 @Composable
 fun SessionInfoOverlay(
     sessionState: SessionState?,
+    batteryLevel: Int,
     modifier: Modifier = Modifier
 ) {
     if (sessionState == null) return
@@ -298,6 +302,18 @@ fun SessionInfoOverlay(
         Column(
             modifier = Modifier.padding(12.dp)
         ) {
+            // Battery level display
+            val batteryColor = when {
+                batteryLevel < 21 -> Color.Red
+                batteryLevel < 55 -> Color.Yellow
+                else -> Color.Green
+            }
+            Text(
+                text = "Battery: $batteryLevel%",
+                color = batteryColor,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
             Text(
                 text = sessionState.routeName,
                 color = Color.White,

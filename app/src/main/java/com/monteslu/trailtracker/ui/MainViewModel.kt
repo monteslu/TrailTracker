@@ -16,6 +16,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val cameraManager = CameraManager(application)
     private val sessionManager = SessionManager(application)
     private val powerManager = PowerManager(application)
+    private val batteryManager = BatteryManager(application)
     
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -38,11 +39,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _frameSkip = MutableStateFlow(1)
     val frameSkip: StateFlow<Int> = _frameSkip.asStateFlow()
     
+    private val _batteryLevel = MutableStateFlow(100)
+    val batteryLevel: StateFlow<Int> = _batteryLevel.asStateFlow()
+    
     init {
         checkForExistingSession()
         startSensorUpdates()
         refreshRoutes()
         startSessionStateUpdates()
+        startBatteryMonitoring()
     }
     
     private fun checkForExistingSession() {
@@ -69,6 +74,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+    
+    private fun startBatteryMonitoring() {
+        batteryManager.startMonitoring()
+        viewModelScope.launch {
+            batteryManager.batteryLevel.collect { level ->
+                _batteryLevel.value = level
+            }
+        }
+    }
+    
     
     fun startLocationUpdates() {
         viewModelScope.launch {
@@ -157,12 +172,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     
     fun getCameraManager(): CameraManager = cameraManager
     
+    
     fun quitApplication() {
         // Stop all active managers
         locationManager.stopLocationUpdates()
         compassManager.stopCompass()
         cameraManager.shutdown()
         powerManager.cleanup()
+        batteryManager.stopMonitoring()
         
         // Exit application
         android.os.Process.killProcess(android.os.Process.myPid())
@@ -174,6 +191,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         compassManager.stopCompass()
         cameraManager.shutdown()
         powerManager.cleanup()
+        batteryManager.stopMonitoring()
     }
 }
 
