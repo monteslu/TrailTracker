@@ -30,9 +30,11 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import com.monteslu.trailtracker.utils.XmpWriter
+import com.monteslu.trailtracker.managers.WeatherData
 
 class CameraManager(private val context: Context) {
     private var cameraProvider: ProcessCameraProvider? = null
+    private var camera: Camera? = null
     private var imageAnalysis: ImageAnalysis? = null
     private var preview: Preview? = null
     private val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -44,6 +46,7 @@ class CameraManager(private val context: Context) {
     private var frameCallback: ((Long) -> Unit)? = null
     private var currentGpsPoint: GpsPoint? = null
     private var currentCompass: Float = 0f
+    private var currentWeather: WeatherData? = null
     
     // FPS tracking
     private var frameCount = AtomicLong(0)
@@ -103,7 +106,7 @@ class CameraManager(private val context: Context) {
                 cameraProvider?.unbindAll()
                 
                 // Bind use cases to camera
-                val camera = cameraProvider?.bindToLifecycle(
+                camera = cameraProvider?.bindToLifecycle(
                     lifecycleOwner,
                     cameraSelector,
                     preview,
@@ -139,6 +142,36 @@ class CameraManager(private val context: Context) {
                 // Handle error
             }
         }, ContextCompat.getMainExecutor(context))
+    }
+    
+    fun triggerAutoFocus(x: Float = 0.5f, y: Float = 0.5f) {
+        camera?.let { cam ->
+            try {
+                // Create focus point at the specified coordinates (or center by default)
+                val focusPoint = SurfaceOrientedMeteringPointFactory(1.0f, 1.0f)
+                    .createPoint(x, y)
+                
+                // Trigger autofocus with 3 second duration before locking again
+                val focusAction = FocusMeteringAction.Builder(focusPoint)
+                    .setAutoCancelDuration(3, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+                
+                cam.cameraControl.startFocusAndMetering(focusAction)
+                Log.d("CameraManager", "Manual autofocus triggered at ($x, $y)")
+                
+                // Re-lock focus after 3.5 seconds
+                CoroutineScope(Dispatchers.Main).launch {
+                    delay(3500)
+                    val lockFocus = FocusMeteringAction.Builder(focusPoint)
+                        .disableAutoCancel() // Lock focus permanently
+                        .build()
+                    cam.cameraControl.startFocusAndMetering(lockFocus)
+                    Log.d("CameraManager", "Focus re-locked after manual autofocus")
+                }
+            } catch (e: Exception) {
+                Log.e("CameraManager", "Error triggering autofocus", e)
+            }
+        } ?: Log.w("CameraManager", "Cannot trigger autofocus - camera not initialized")
     }
     
     fun startCapture(outputDir: File, onFrameCaptured: (Long) -> Unit, onFpsUpdate: (Float) -> Unit, frameSkipValue: Int = 1) {
@@ -338,7 +371,7 @@ class CameraManager(private val context: Context) {
         
         // Add XMP metadata with full precision data
         try {
-            XmpWriter.addXmpToJpeg(outputFile, gpsData, compassData, timestamp)
+            XmpWriter.addXmpToJpeg(outputFile, gpsData, compassData, timestamp, currentWeather)
         } catch (e: Exception) {
             Log.e("CameraManager", "Error writing XMP data", e)
         }
@@ -353,6 +386,10 @@ class CameraManager(private val context: Context) {
     fun updateGpsData(gpsPoint: GpsPoint?, compass: Float) {
         currentGpsPoint = gpsPoint
         currentCompass = compass
+    }
+    
+    fun updateWeatherData(weather: WeatherData?) {
+        currentWeather = weather
     }
     
     

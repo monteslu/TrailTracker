@@ -1,6 +1,7 @@
 package com.monteslu.trailtracker.utils
 
 import com.monteslu.trailtracker.data.GpsPoint
+import com.monteslu.trailtracker.managers.WeatherData
 import android.os.Build
 import java.io.*
 import java.text.SimpleDateFormat
@@ -11,13 +12,13 @@ object XmpWriter {
     private const val XMP_HEADER = "http://ns.adobe.com/xap/1.0/\u0000"
     private const val APP1_MARKER = 0xFFE1
     
-    fun addXmpToJpeg(jpegFile: File, gpsPoint: GpsPoint?, compass: Float, timestamp: Long) {
+    fun addXmpToJpeg(jpegFile: File, gpsPoint: GpsPoint?, compass: Float, timestamp: Long, weather: WeatherData? = null) {
         try {
             // Read original JPEG
             val originalBytes = jpegFile.readBytes()
             
             // Create XMP packet
-            val xmpPacket = createXmpPacket(gpsPoint, compass, timestamp)
+            val xmpPacket = createXmpPacket(gpsPoint, compass, timestamp, weather)
             
             // Write new JPEG with XMP
             jpegFile.writeBytes(insertXmpIntoJpeg(originalBytes, xmpPacket))
@@ -26,7 +27,7 @@ object XmpWriter {
         }
     }
     
-    private fun createXmpPacket(gpsPoint: GpsPoint?, compass: Float, timestamp: Long): ByteArray {
+    private fun createXmpPacket(gpsPoint: GpsPoint?, compass: Float, timestamp: Long, weather: WeatherData?): ByteArray {
         val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
         dateFormat.timeZone = TimeZone.getTimeZone("UTC")
         val isoDate = dateFormat.format(Date(timestamp))
@@ -88,6 +89,42 @@ object XmpWriter {
                 append("  <tt:Accuracy>${gps.accuracy}</tt:Accuracy>\n")
                 append("  <tt:GPSCompass>${gps.compass}</tt:GPSCompass>\n")
                 append("  <tt:GPSTimestamp>${gps.timestamp}</tt:GPSTimestamp>\n")
+            }
+            
+            // Weather data with "Weather" prefix to avoid collisions
+            // IMPORTANT: WeatherTimeUnix is when the weather measurement was taken (could be hours/days old)
+            // WeatherFetchedAtUnix is when we actually retrieved this data from the API
+            weather?.let { w ->
+                append("  <tt:WeatherTemperature>${w.temperature}</tt:WeatherTemperature>\n")
+                append("  <tt:WeatherTemperatureUnit>C</tt:WeatherTemperatureUnit>\n")
+                append("  <tt:WeatherWindSpeed>${w.windSpeed}</tt:WeatherWindSpeed>\n")
+                append("  <tt:WeatherWindSpeedUnit>kmh</tt:WeatherWindSpeedUnit>\n")
+                append("  <tt:WeatherWindDirection>${w.windDirection}</tt:WeatherWindDirection>\n")
+                append("  <tt:WeatherCode>${w.weatherCode}</tt:WeatherCode>\n")
+                append("  <tt:WeatherIsDay>${w.isDay}</tt:WeatherIsDay>\n")
+                append("  <tt:WeatherInterval>${w.interval}</tt:WeatherInterval>\n")
+                append("  <tt:WeatherTime>${w.time}</tt:WeatherTime>\n")
+                append("  <tt:WeatherTimeUnix>${w.timeUnix}</tt:WeatherTimeUnix>\n")
+                append("  <tt:WeatherFetchedAtUnix>${w.fetchedAt / 1000}</tt:WeatherFetchedAtUnix>\n")
+                append("  <tt:WeatherLatitude>${w.latitude}</tt:WeatherLatitude>\n")
+                append("  <tt:WeatherLongitude>${w.longitude}</tt:WeatherLongitude>\n")
+                
+                // Optional fields from API response
+                w.elevation?.let { elev ->
+                    append("  <tt:WeatherElevation>${elev}</tt:WeatherElevation>\n")
+                }
+                w.generationTimeMs?.let { genTime ->
+                    append("  <tt:WeatherGenerationTimeMs>${genTime}</tt:WeatherGenerationTimeMs>\n")
+                }
+                w.utcOffsetSeconds?.let { offset ->
+                    append("  <tt:WeatherUtcOffsetSeconds>${offset}</tt:WeatherUtcOffsetSeconds>\n")
+                }
+                w.timezone?.let { tz ->
+                    append("  <tt:WeatherTimezone>${tz}</tt:WeatherTimezone>\n")
+                }
+                w.timezoneAbbreviation?.let { tzAbbr ->
+                    append("  <tt:WeatherTimezoneAbbreviation>${tzAbbr}</tt:WeatherTimezoneAbbreviation>\n")
+                }
             }
             
             append("</rdf:Description>\n")

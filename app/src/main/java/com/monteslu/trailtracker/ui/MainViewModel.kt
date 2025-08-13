@@ -17,6 +17,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val sessionManager = SessionManager(application)
     private val powerManager = PowerManager(application)
     private val batteryManager = BatteryManager(application)
+    private val weatherManager = WeatherManager()
     
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
@@ -41,6 +42,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     
     private val _batteryLevel = MutableStateFlow(100)
     val batteryLevel: StateFlow<Int> = _batteryLevel.asStateFlow()
+    
+    private val _currentWeather = MutableStateFlow<WeatherData?>(null)
+    val currentWeather: StateFlow<WeatherData?> = _currentWeather.asStateFlow()
     
     init {
         checkForExistingSession()
@@ -91,6 +95,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _gpsPoint.value = gpsPoint
                 // Update camera manager with latest GPS data
                 cameraManager.updateGpsData(gpsPoint, _compass.value)
+                
+                // Fetch weather when we have GPS location
+                if (gpsPoint != null && weatherManager.shouldFetchWeather()) {
+                    viewModelScope.launch {
+                        val weather = weatherManager.fetchWeather(gpsPoint.lat, gpsPoint.lon)
+                        _currentWeather.value = weather
+                        cameraManager.updateWeatherData(weather)
+                    }
+                }
+                
                 if (_uiState.value.isRecording) {
                     sessionManager.logGpsPoint(gpsPoint)
                 }
@@ -172,6 +186,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     
     fun getCameraManager(): CameraManager = cameraManager
     
+    fun triggerCameraFocus() {
+        cameraManager.triggerAutoFocus()
+    }
+    
     
     fun quitApplication() {
         // Stop all active managers
@@ -180,6 +198,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         cameraManager.shutdown()
         powerManager.cleanup()
         batteryManager.stopMonitoring()
+        weatherManager.stopPeriodicFetch()
         
         // Exit application
         android.os.Process.killProcess(android.os.Process.myPid())
@@ -192,6 +211,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         cameraManager.shutdown()
         powerManager.cleanup()
         batteryManager.stopMonitoring()
+        weatherManager.stopPeriodicFetch()
     }
 }
 

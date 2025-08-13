@@ -4,6 +4,7 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.draw.rotate
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -22,6 +23,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.monteslu.trailtracker.data.GpsPoint
 import com.monteslu.trailtracker.data.SessionState
+import com.monteslu.trailtracker.managers.WeatherData
 import com.monteslu.trailtracker.ui.components.MenuDialog
 import com.monteslu.trailtracker.ui.components.NewSessionDialog
 import com.monteslu.trailtracker.ui.components.ResumeSessionDialog
@@ -40,6 +42,7 @@ fun MainScreen(viewModel: MainViewModel) {
     val allRoutes by viewModel.routes.collectAsState()
     val sessionState by viewModel.sessionState.collectAsState()
     val batteryLevel by viewModel.batteryLevel.collectAsState()
+    val currentWeather by viewModel.currentWeather.collectAsState()
     
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
     var cameraReady by remember { mutableStateOf(false) }
@@ -48,7 +51,7 @@ fun MainScreen(viewModel: MainViewModel) {
     var showResumeDialog by remember { mutableStateOf(false) }
     
     Box(modifier = Modifier.fillMaxSize()) {
-        // Camera Preview
+        // Camera Preview with tap-to-focus
         AndroidView(
             factory = { ctx ->
                 PreviewView(ctx).also { preview ->
@@ -60,7 +63,12 @@ fun MainScreen(viewModel: MainViewModel) {
                     )
                 }
             },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable { 
+                    // Trigger autofocus when tapping anywhere on the camera preview
+                    viewModel.triggerCameraFocus()
+                }
         )
         
         // GPS Overlay - moved right to avoid menu button overlap
@@ -92,14 +100,24 @@ fun MainScreen(viewModel: MainViewModel) {
             }
         }
         
-        // Session Info
-        if (uiState.hasActiveSession && sessionState != null) {
-            SessionInfoOverlay(
-                sessionState = sessionState,
+        // Weather and Battery Info - Always show when available
+        if (currentWeather != null || batteryLevel > 0) {
+            WeatherBatteryOverlay(
                 batteryLevel = batteryLevel,
+                weather = currentWeather,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(16.dp)
+            )
+        }
+        
+        // Session Info - Show when session is active
+        if (uiState.hasActiveSession && sessionState != null) {
+            SessionInfoOverlay(
+                sessionState = sessionState,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = if (currentWeather != null || batteryLevel > 0) 100.dp else 16.dp, end = 16.dp)
             )
         }
         
@@ -285,9 +303,85 @@ fun GpsOverlay(
 }
 
 @Composable
+fun WeatherBatteryOverlay(
+    batteryLevel: Int,
+    weather: WeatherData?,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = Color.Black.copy(alpha = 0.7f)
+        ),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp)
+        ) {
+            // Battery level display (first/top)
+            val batteryColor = when {
+                batteryLevel < 21 -> Color.Red
+                batteryLevel < 55 -> Color.Yellow
+                else -> Color.Green
+            }
+            Text(
+                text = "Battery: $batteryLevel%",
+                color = batteryColor,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+            
+            // Weather display (below battery)
+            weather?.let { w ->
+                val ageMinutes = (System.currentTimeMillis() - (w.timeUnix * 1000)) / 60000
+                val ageText = when {
+                    ageMinutes < 60 -> "${ageMinutes}m ago"
+                    ageMinutes < 1440 -> "${ageMinutes / 60}h ago"
+                    else -> "${ageMinutes / 1440}d ago"
+                }
+                
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "${w.temperature.toInt()}°C",
+                        color = Color.Cyan,
+                        fontSize = 16.sp
+                    )
+                    
+                    // Wind speed and direction arrow
+                    Text(
+                        text = "${w.windSpeed.toInt()}km/h",
+                        color = Color.Cyan,
+                        fontSize = 16.sp
+                    )
+                    
+                    // Arrow shows where wind is BLOWING TO (more intuitive)
+                    // API gives "from" direction: 0° = FROM north, 90° = FROM east
+                    // Add 180° to show where it's going: north wind (0°) → blowing south (180°)
+                    Text(
+                        text = "↓",
+                        color = Color.Cyan,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.rotate(w.windDirection.toFloat() + 180f)
+                    )
+                }
+                
+                Text(
+                    text = "Weather: $ageText",
+                    color = Color.Gray,
+                    fontSize = 14.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun SessionInfoOverlay(
     sessionState: SessionState?,
-    batteryLevel: Int,
     modifier: Modifier = Modifier
 ) {
     if (sessionState == null) return
@@ -302,18 +396,6 @@ fun SessionInfoOverlay(
         Column(
             modifier = Modifier.padding(12.dp)
         ) {
-            // Battery level display
-            val batteryColor = when {
-                batteryLevel < 21 -> Color.Red
-                batteryLevel < 55 -> Color.Yellow
-                else -> Color.Green
-            }
-            Text(
-                text = "Battery: $batteryLevel%",
-                color = batteryColor,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
-            )
             Text(
                 text = sessionState.routeName,
                 color = Color.White,
